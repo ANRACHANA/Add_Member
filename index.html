@@ -15,7 +15,7 @@ textarea{height:120px;resize:vertical;}
 .accountsBox{max-height:200px;overflow-y:auto;background:#0f172a;padding:10px;border-radius:10px;border:1px solid #334155;}
 .accountsBox div{padding:5px 0;}
 .accountsBox label{cursor:pointer;}
-.accountsBox .blocked{color:red;}
+.accountsBox .blocked{color:red;font-weight:600;}
 .btns{display:flex;gap:15px;margin-top:20px;flex-wrap:wrap;}
 button{flex:1;padding:12px;border:none;border-radius:12px;font-weight:600;cursor:pointer;transition:all 0.3s;}
 .start{background:linear-gradient(90deg,#38bdf8,#0ea5e9);}
@@ -49,6 +49,7 @@ label input[type="checkbox"]{margin-right:8px;}
       <option value="username">Username Only</option>
     </select>
   </div>
+
   <div>
     <label>Last Online:</label>
     <select id="filterLastOnline">
@@ -57,11 +58,12 @@ label input[type="checkbox"]{margin-right:8px;}
       <option value="month">This Month</option>
     </select>
   </div>
+
   <div>
     <label>Profile Photo:</label>
     <select id="filterPhoto">
       <option value="all" selected>All</option>
-      <option value="has">Have Photo</option>
+      <option value="has">Has Photo</option>
     </select>
   </div>
 </div>
@@ -95,104 +97,153 @@ label input[type="checkbox"]{margin-right:8px;}
 </div>
 
 <script>
-// Load accounts
-async function loadAccounts() {
+async function loadAccounts(){
   const res = await fetch("/accounts");
   const accounts = await res.json();
+  const floodRes = await fetch("/flood-waits");
+  const floodData = await floodRes.json();
+
   const container = document.getElementById("accountsList");
   container.innerHTML = "";
-  accounts.forEach(acc => {
+
+  accounts.forEach(acc=>{
+    const fw = floodData.find(f=>f.account===acc.name);
+    const isBlocked = !!fw;
+    const labelText = isBlocked
+      ? `${acc.name} (${acc.phone}) – Retry at ${fw.endTime}`
+      : `${acc.name} (${acc.phone})`;
     const div = document.createElement("div");
-    div.innerHTML = `<label><input type="checkbox" class="accountChk" value="${acc}"> ${acc}</label>`;
+    div.className = isBlocked ? "blocked" : "";
+    div.innerHTML = `<label>
+      <input type="checkbox" class="accountChk" value="${acc.name}" ${isBlocked?'disabled':''}>
+      ${labelText}
+    </label>`;
     container.appendChild(div);
   });
 }
 loadAccounts();
 
-function toggleSelectAll() {
+function toggleSelectAll(){
   const checked = document.getElementById("selectAll").checked;
-  document.querySelectorAll(".accountChk").forEach(chk => chk.checked = checked);
+  document.querySelectorAll(".accountChk:not(:disabled)").forEach(chk=>chk.checked=checked);
 }
-
-function getSelectedAccounts() {
-  const selected = [];
-  document.querySelectorAll(".accountChk:checked").forEach(chk => selected.push(chk.value));
+function getSelectedAccounts(){
+  const selected=[];
+  document.querySelectorAll(".accountChk:checked").forEach(chk=>selected.push(chk.value));
   return selected;
 }
 
-// Export members
-async function exportMembers() {
+async function exportMembers(){
   const selectedAccounts = getSelectedAccounts();
-  if (!selectedAccounts.length) { alert("Select at least one account"); return; }
+  if(selectedAccounts.length===0){ alert("Select at least one account"); return; }
   const group = document.getElementById("sourceGroup").value;
-  const res = await fetch("/export-members", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ account: selectedAccounts[0], group })
+  const account = selectedAccounts[0];
+  const filterMembers = document.getElementById("filterMembers").value;
+  const filterLastOnline = document.getElementById("filterLastOnline").value;
+  const filterPhoto = document.getElementById("filterPhoto").value;
+
+  document.getElementById("status").innerText="Loading members...";
+  const res = await fetch("/export-members",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({account, group, filterMembers, filterLastOnline, filterPhoto})
   });
   const data = await res.json();
-  if (data.success) {
-    document.getElementById("users").value = data.ids.join("\n");
-    document.getElementById("exportTotal").innerText = data.ids.length;
-    document.getElementById("status").innerText = `Exported ${data.ids.length} members`;
+  if(data.success){
+    document.getElementById("users").value=data.ids.join("\n");
+    document.getElementById("exportTotal").innerText=data.ids.length;
+    document.getElementById("status").innerText=`Exported ${data.ids.length} members`;
   } else {
-    document.getElementById("status").innerText = `Error: ${data.error}`;
+    document.getElementById("status").innerText=`Error: ${data.error}`;
   }
 }
 
-// Start / Stop / Restart
-async function start() {
-  const group = document.getElementById("targetGroup").value;
-  const users = document.getElementById("users").value.split("\n").map(u => u.trim()).filter(u => u !== "");
-  const accounts = getSelectedAccounts();
-  if (!accounts.length) { alert("Select at least one account"); return; }
-  document.getElementById("status").innerText = "Adding members...";
-  const res = await fetch("/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ group, usernames: users, accounts })
+async function start(){
+  const group=document.getElementById("targetGroup").value;
+  const users=document.getElementById("users").value.split("\n").map(u=>u.trim()).filter(u=>u!=="");
+  const accounts=getSelectedAccounts();
+  if(accounts.length===0){ alert("Select at least one account"); return; }
+  document.getElementById("status").innerText="Adding members...";
+  document.getElementById("memberList").innerHTML="";
+
+  const res = await fetch("/start",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({group, usernames:users, accounts})
   });
   const data = await res.json();
-  document.getElementById("status").innerText = data.message;
+  document.getElementById("status").innerText=data.message;
 }
 
-async function stop() {
-  const res = await fetch("/stop", { method: "POST" });
-  const data = await res.json();
-  document.getElementById("status").innerText = data.message;
+async function stop(){ 
+  const res=await fetch("/stop",{method:"POST"}); 
+  const data=await res.json(); 
+  document.getElementById("status").innerText=data.message; 
 }
 
-async function restart() {
-  const res = await fetch("/restart", { method: "POST" });
-  const data = await res.json();
-  document.getElementById("status").innerText = data.message;
-  document.getElementById("success").innerText = 0;
-  document.getElementById("fail").innerText = 0;
-  document.getElementById("memberList").innerHTML = "";
+async function restart(){ 
+  const res=await fetch("/restart",{method:"POST"}); 
+  const data=await res.json(); 
+  document.getElementById("status").innerText=data.message; 
+  document.getElementById("success").innerText=0; 
+  document.getElementById("fail").innerText=0; 
+  document.getElementById("memberList").innerHTML="";
   document.getElementById("exportTotal").innerText = 0;
-  loadAccounts();
+  loadAccounts(); 
 }
 
-// Update UI
-async function updateUI() {
+async function updateUI(){
   const statsRes = await fetch("/stats");
   const statsData = await statsRes.json();
-  document.getElementById("success").innerText = statsData.success;
-  document.getElementById("fail").innerText = statsData.fail;
+  document.getElementById("success").innerText=statsData.success;
+  document.getElementById("fail").innerText=statsData.fail;
+
+  const memberLog = document.getElementById("memberList");
+  memberLog.innerHTML="";
 
   const logRes = await fetch("/member-logs");
   const logs = await logRes.json();
-  const memberLog = document.getElementById("memberList");
-  memberLog.innerHTML = "";
-  logs.forEach(l => {
-    const div = document.createElement("div");
-    div.innerText = `${l.status === "success" ? "✅" : "❌"} ${l.username}${l.error ? " (" + l.error + ")" : ""}`;
+  logs.forEach(l=>{
+    const div=document.createElement("div");
+    let msg = `${l.status==="success"?"✅":"❌"} ${l.username}`;
+    if(l.status==="fail" && l.error) msg += ` (${l.error})`;
+    div.innerText = msg;
     memberLog.appendChild(div);
   });
+
+  const floodRes = await fetch("/flood-waits");
+  const floodData = await floodRes.json();
+  floodData.forEach(fw=>{
+    const div=document.createElement("div");
+    div.innerHTML=`⏳ ${fw.username} on ${fw.account} – Retry at <b>${fw.endTime}</b> (<span id="countdown-${fw.username}">${fw.remainingSec}s</span>)`;
+    const btn=document.createElement("button");
+    btn.innerText="Retry Now";
+    btn.style.marginLeft="10px";
+    btn.onclick=async ()=>{
+      const res = await fetch("/retry",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({username:fw.username})
+      });
+      const data=await res.json();
+      alert(data.message || data.error);
+    };
+    div.appendChild(btn);
+    memberLog.appendChild(div);
+  });
+
+  document.getElementById("status").innerText = logs.length>0 ? `Processing ${logs[logs.length-1].username}...` : "Idle";
 }
 
-// Refresh UI every second
-setInterval(updateUI, 1000);
+setInterval(()=>{
+  document.querySelectorAll("[id^='countdown-']").forEach(span=>{
+    let sec=parseInt(span.innerText);
+    if(sec>0) sec--;
+    span.innerText=sec+"s";
+  });
+},1000);
+
+setInterval(updateUI,1000);
 </script>
 </body>
 </html>
