@@ -1,159 +1,164 @@
 require("dotenv").config();
 const express = require("express");
-const fs = require("fs");
+const path = require("path");
+const cors = require("cors");
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions");
+const { Api } = require("telegram");
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
-const PORT = process.env.PORT || 3000;
-
-/* ==============================
-   In-Memory State (Render safe)
-============================== */
-
-let queue = [];
-let processing = false;
-let stopped = false;
-let stats = { success: 0, fail: 0 };
-let logs = [];
-let floodWaits = []; // { id, endTime }
-
-/* ==============================
-   Utility Functions
-============================== */
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function addLog(status, id, error = null) {
-  logs.push({ status, id, error });
-  if (logs.length > 500) logs.shift();
-}
-
-function formatDate(date) {
-  return date.toISOString().replace("T", " ").substring(0, 19);
-}
-
-/* ==============================
-   Queue Processor
-============================== */
-
-async function processQueue() {
-  if (processing || stopped) return;
-  processing = true;
-
-  while (queue.length > 0 && !stopped) {
-    const job = queue.shift();
-
-    try {
-      await handleJob(job);
-      stats.success++;
-      addLog("success", job.id);
-    } catch (err) {
-      stats.fail++;
-      addLog("fail", job.id, err.message);
-
-      if (err.retryAfter) {
-        const endTime = new Date(Date.now() + err.retryAfter * 1000);
-        floodWaits.push({
-          id: job.id,
-          endTime,
-        });
-
-        setTimeout(() => {
-          queue.push(job);
-          floodWaits = floodWaits.filter(f => f.id !== job.id);
-          processQueue();
-        }, err.retryAfter * 1000);
-      }
-    }
-
-    await sleep(2000); // delay between jobs
-  }
-
-  processing = false;
-}
-
-/* ==============================
-   Fake Job Handler (Example)
-============================== */
-
-async function handleJob(job) {
-  // Simulate random failure
-  const random = Math.random();
-
-  if (random < 0.2) {
-    const error = new Error("Simulated Flood Wait");
-    error.retryAfter = 10; // seconds
-    throw error;
-  }
-
-  await sleep(1000);
-}
-
-/* ==============================
-   API Routes
-============================== */
-
-app.post("/start", async (req, res) => {
-  const { items } = req.body;
-  if (!items || items.length === 0) {
-    return res.json({ error: "No items provided" });
-  }
-
-  stopped = false;
-  items.forEach(id => queue.push({ id }));
-  processQueue();
-
-  res.json({ message: "Queue started" });
+// Serve HTML directly
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
+const PORT = process.env.PORT || 3000;
+const DELAY = parseInt(process.env.DELAY_MS) || 30000;
+
+// --- Multi-account setup ---
+let clients = {};
+for (let i = 1; i <= 10; i++) {
+  const apiId = process.env[`API_ID_${i}`];
+  const apiHash = process.env[`API_HASH_${i}`];
+  const session = process.env[`SESSION_${i}`];
+  if (apiId && apiHash && session) {
+    clients[`account${i}`] = new TelegramClient(
+      new StringSession(session),
+      parseInt(apiId),
+      apiHash,
+      { connectionRetries: 5 }
+    );
+  }
+}
+
+// --- In-memory stats ---
+let stats = { success: 0, fail: 0 };
+let memberLogs = [];
+let floodWaits = []; // {username, account, endTime, remainingSec}
+let isRunning = false;
+let interval;
+
+// --- Routes ---
+app.get("/accounts", (req, res) => res.json(Object.keys(clients)));
+app.get("/stats", (req, res) => res.json(stats));
+app.get("/member-logs", (req, res) => res.json(memberLogs));
+app.get("/flood-waits", (req, res) => res.json(floodWaits));
+
+// --- Export members ---
+app.post("/export-members", async (req, res) => {
+  const { account, group } = req.body;
+  const client = clients[account];
+  if (!client) return res.json({ success: false, error: "Account not found" });
+
+  try {
+    await client.connect();
+    const participants = await client.getParticipants(group);
+    const ids = participants.map(p => p.username || p.id);
+    res.json({ success: true, ids });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+// --- Start adding members ---
+app.post("/start", async (req, res) => {
+  const { group, usernames, accounts } = req.body;
+  if (!accounts || accounts.length === 0) return res.json({ message: "No accounts selected" });
+  if (isRunning) return res.json({ message: "Already running" });
+
+  isRunning = true;
+  stats = { success: 0, fail: 0 };
+  memberLogs = [];
+  floodWaits = [];
+  let userIndex = 0;
+  let accountIndex = 0;
+
+  interval = setInterval(async () => {
+    if (!isRunning || userIndex >= usernames.length) {
+      clearInterval(interval);
+      isRunning = false;
+      return;
+    }
+
+    const accountName = accounts[accountIndex];
+    const client = clients[accountName];
+    const username = usernames[userIndex];
+
+    try {
+      await client.connect();
+      await client.invoke(new Api.channels.InviteToChannel({
+        channel: group,
+        users: [username]
+      }));
+      console.log(`✅ ${accountName} added ${username}`);
+      stats.success++;
+      memberLogs.push({ username, status: "success" });
+      userIndex++;
+
+    } catch (err) {
+      if (err.message.includes("FLOOD_WAIT")) {
+        console.log(`⚠ FLOOD_WAIT on ${accountName}`);
+        const waitSec = parseInt(err.message.match(/\d+/)[0]);
+        floodWaits.push({
+          username,
+          account: accountName,
+          endTime: new Date(Date.now() + waitSec * 1000).toLocaleTimeString(),
+          remainingSec: waitSec
+        });
+        accountIndex++;
+        if (accountIndex >= accounts.length) {
+          clearInterval(interval);
+          isRunning = false;
+        }
+      } else {
+        console.log(`❌ Failed ${username} - ${err.message}`);
+        stats.fail++;
+        memberLogs.push({ username, status: "fail", error: err.message });
+        userIndex++;
+      }
+    }
+  }, DELAY);
+
+  res.json({ message: `Started with ${accounts.length} accounts, delay ${DELAY / 1000}s` });
+});
+
+// --- Stop ---
 app.post("/stop", (req, res) => {
-  stopped = true;
+  isRunning = false;
+  clearInterval(interval);
   res.json({ message: "Stopped" });
 });
 
+// --- Restart ---
 app.post("/restart", (req, res) => {
-  stopped = false;
-  processQueue();
+  isRunning = false;
+  clearInterval(interval);
+  stats = { success: 0, fail: 0 };
+  memberLogs = [];
+  floodWaits = [];
   res.json({ message: "Restarted" });
 });
 
-app.get("/stats", (req, res) => {
-  res.json(stats);
-});
+// --- Retry single user (optional) ---
+app.post("/retry", async (req, res) => {
+  const { username, group } = req.body;
+  const availableAccounts = Object.keys(clients);
+  if (availableAccounts.length === 0) return res.json({ error: "No accounts available" });
 
-app.get("/logs", (req, res) => {
-  res.json(logs);
-});
+  const accountName = availableAccounts[0];
+  const client = clients[accountName];
 
-app.get("/flood-waits", (req, res) => {
-  const data = floodWaits.map(f => ({
-    id: f.id,
-    endTime: formatDate(f.endTime),
-    remainingSec: Math.max(
-      0,
-      Math.floor((f.endTime - Date.now()) / 1000)
-    ),
-  }));
-  res.json(data);
-});
-
-/* ==============================
-   Auto Resume After Crash
-============================== */
-
-setInterval(() => {
-  if (!processing && queue.length > 0 && !stopped) {
-    processQueue();
+  try {
+    await client.connect();
+    await client.invoke(new Api.channels.InviteToChannel({ channel: group, users: [username] }));
+    res.json({ message: `${username} retried successfully with ${accountName}` });
+  } catch (err) {
+    res.json({ error: err.message });
   }
-}, 5000);
-
-/* ==============================
-   Start Server
-============================== */
-
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
 });
+
+// --- Start server ---
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
