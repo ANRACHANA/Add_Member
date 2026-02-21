@@ -40,7 +40,6 @@ label input[type="checkbox"]{margin-right:8px;}
 <h3>Source Group (Export Members)</h3>
 <input type="text" id="sourceGroup" placeholder="Source Group">
 
-<!-- Filters -->
 <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
   <div>
     <label>Members:</label>
@@ -49,7 +48,6 @@ label input[type="checkbox"]{margin-right:8px;}
       <option value="username">Username Only</option>
     </select>
   </div>
-
   <div>
     <label>Last Online:</label>
     <select id="filterLastOnline">
@@ -58,7 +56,6 @@ label input[type="checkbox"]{margin-right:8px;}
       <option value="month">This Month</option>
     </select>
   </div>
-
   <div>
     <label>Profile Photo:</label>
     <select id="filterPhoto">
@@ -205,8 +202,10 @@ async function updateUI(){
   const logs = await logRes.json();
   logs.forEach(l=>{
     const div=document.createElement("div");
-    let msg = `${l.status==="success"?"✅":"❌"} ${l.username}`;
-    if(l.status==="fail" && l.error) msg += ` (${l.error})`;
+    let msg="";
+    if(l.status==="success") msg = `✅ ${l.username} add by ${l.account}`;
+    else if(l.status==="fail") msg = `❌ ${l.username} (${l.error}) add by ${l.account}`;
+    else if(l.status==="skipped") msg = `⚠️ ${l.username} skipped (${l.reason}) add by ${l.account}`;
     div.innerText = msg;
     memberLog.appendChild(div);
   });
@@ -223,7 +222,7 @@ async function updateUI(){
       const res = await fetch("/retry",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({username:fw.username})
+        body:JSON.stringify({username:fw.username, group:document.getElementById("targetGroup").value})
       });
       const data=await res.json();
       alert(data.message || data.error);
