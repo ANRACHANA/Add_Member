@@ -10,17 +10,15 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Serve HTML directly
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
+// Serve HTML
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
 const PORT = process.env.PORT || 3000;
 const DELAY = parseInt(process.env.DELAY_MS) || 30000;
 
 // --- Multi-account setup ---
 let clients = {};
-let accountsInfo = {}; // store phone number
+let accountsInfo = {};
 for (let i = 1; i <= 10; i++) {
   const apiId = process.env[`API_ID_${i}`];
   const apiHash = process.env[`API_HASH_${i}`];
@@ -37,6 +35,18 @@ for (let i = 1; i <= 10; i++) {
   }
 }
 
+// Connect all clients at startup
+(async () => {
+  for (const name in clients) {
+    try {
+      await clients[name].connect();
+      console.log(`✅ Connected ${name}`);
+    } catch (err) {
+      console.log(`❌ Failed to connect ${name}: ${err.message}`);
+    }
+  }
+})();
+
 // --- In-memory stats ---
 let stats = { success: 0, fail: 0 };
 let memberLogs = [];
@@ -44,11 +54,36 @@ let floodWaits = []; // {username, account, endTime, remainingSec}
 let isRunning = false;
 let interval;
 
+// --- Helper: Auto join group if not joined ---
+async function ensureJoined(client, group) {
+  try {
+    await client.getParticipants(group, { limit: 1 });
+    return; // already joined
+  } catch {}
+
+  try {
+    let hash = null;
+    if (group.includes("t.me/")) {
+      const parts = group.split("/");
+      hash = parts[parts.length - 1];
+    }
+
+    if (hash) {
+      await client.invoke(new Api.messages.ImportChatInvite({ hash }));
+      console.log(`✅ Auto-joined group ${group}`);
+    } else {
+      console.log(`⚠️ Cannot auto-join group: ${group}, use exact invite link`);
+    }
+  } catch (err) {
+    console.log(`❌ Failed to auto-join ${group}: ${err.message}`);
+  }
+}
+
 // --- Routes ---
 app.get("/accounts", (req, res) => {
-  const list = Object.keys(clients).map(name => ({
+  const list = Object.keys(clients).map((name) => ({
     name,
-    phone: accountsInfo[name]?.phone || ""
+    phone: accountsInfo[name]?.phone || "",
   }));
   res.json(list);
 });
@@ -64,24 +99,28 @@ app.post("/export-members", async (req, res) => {
   if (!client) return res.json({ success: false, error: "Account not found" });
 
   try {
-    await client.connect();
-    let participants = await client.getParticipants(group);
+    await ensureJoined(client, group);
 
-    // Apply filters
-    if(filterMembers === "username") participants = participants.filter(p => p.username);
-    if(filterPhoto === "has") participants = participants.filter(p => p.photo);
-    if(filterLastOnline !== "all") {
+    let participants = [];
+    for await (const user of client.iterParticipants(group)) {
+      participants.push(user);
+    }
+
+    // Filters
+    if (filterMembers === "username") participants = participants.filter((p) => p.username);
+    if (filterPhoto === "has") participants = participants.filter((p) => p.photo);
+    if (filterLastOnline !== "all") {
       const now = Date.now();
-      participants = participants.filter(p=>{
-        if(!p.status) return false;
-        const statusDate = new Date(p.status.date*1000);
-        if(filterLastOnline==="week") return now - statusDate <= 7*24*3600*1000;
-        if(filterLastOnline==="month") return now - statusDate <= 30*24*3600*1000;
+      participants = participants.filter((p) => {
+        if (!p.status || !p.status.date) return false;
+        const statusDate = new Date(p.status.date * 1000);
+        if (filterLastOnline === "week") return now - statusDate <= 7 * 24 * 3600 * 1000;
+        if (filterLastOnline === "month") return now - statusDate <= 30 * 24 * 3600 * 1000;
         return true;
       });
     }
 
-    const ids = participants.map(p => p.username || p.id);
+    const ids = participants.map((p) => p.username || p.id);
     res.json({ success: true, ids });
   } catch (err) {
     res.json({ success: false, error: err.message });
@@ -92,6 +131,7 @@ app.post("/export-members", async (req, res) => {
 app.post("/start", async (req, res) => {
   const { group, usernames, accounts } = req.body;
   if (!accounts || accounts.length === 0) return res.json({ message: "No accounts selected" });
+  if (!group) return res.json({ message: "Target group required" });
   if (isRunning) return res.json({ message: "Already running" });
 
   isRunning = true;
@@ -112,16 +152,16 @@ app.post("/start", async (req, res) => {
     const client = clients[accountName];
     const username = usernames[userIndex];
 
+    await ensureJoined(client, group);
+
     try {
-      await client.connect();
-      await client.invoke(new Api.channels.InviteToChannel({
-        channel: group,
-        users: [username]
-      }));
-      console.log(`✅ ${accountName} added ${username}`);
+      await client.invoke(new Api.channels.InviteToChannel({ channel: group, users: [username] }));
       stats.success++;
-      memberLogs.push({ username, status: "success" });
+      memberLogs.push({ username, status: "success", account: accountName });
+      console.log(`✅ ${username} added by ${accountName}`);
+
       userIndex++;
+      accountIndex = (accountIndex + 1) % accounts.length; // switch account
     } catch (err) {
       if (err.message.includes("FLOOD_WAIT")) {
         const waitSec = parseInt(err.message.match(/\d+/)[0]);
@@ -129,18 +169,23 @@ app.post("/start", async (req, res) => {
           username,
           account: accountName,
           endTime: new Date(Date.now() + waitSec * 1000).toLocaleTimeString(),
-          remainingSec: waitSec
+          remainingSec: waitSec,
         });
-        accountIndex++;
-        if (accountIndex >= accounts.length) {
-          clearInterval(interval);
-          isRunning = false;
-        }
-      } else {
-        console.log(`❌ Failed ${username} - ${err.message}`);
+        accountIndex = (accountIndex + 1) % accounts.length;
+      } else if (
+        err.message.includes("USER_PRIVACY") ||
+        err.message.includes("USER_ALREADY") ||
+        err.message.includes("USER_BANNED")
+      ) {
         stats.fail++;
-        memberLogs.push({ username, status: "fail", error: err.message });
+        memberLogs.push({ username, status: "skipped", reason: err.message, account: accountName });
         userIndex++;
+        accountIndex = (accountIndex + 1) % accounts.length;
+      } else {
+        stats.fail++;
+        memberLogs.push({ username, status: "fail", error: err.message, account: accountName });
+        userIndex++;
+        accountIndex = (accountIndex + 1) % accounts.length;
       }
     }
   }, DELAY);
@@ -168,14 +213,16 @@ app.post("/restart", (req, res) => {
 // --- Retry single user ---
 app.post("/retry", async (req, res) => {
   const { username, group } = req.body;
+  if (!group) return res.json({ error: "Target group required" });
+
   const availableAccounts = Object.keys(clients);
   if (availableAccounts.length === 0) return res.json({ error: "No accounts available" });
 
-  const accountName = availableAccounts[0];
+  const accountName = availableAccounts[Math.floor(Math.random() * availableAccounts.length)];
   const client = clients[accountName];
 
   try {
-    await client.connect();
+    await ensureJoined(client, group);
     await client.invoke(new Api.channels.InviteToChannel({ channel: group, users: [username] }));
     res.json({ message: `${username} retried successfully with ${accountName}` });
   } catch (err) {
