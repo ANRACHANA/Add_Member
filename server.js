@@ -1,6 +1,5 @@
 require("dotenv").config();
 const express = require("express");
-const path = require("path");
 const cors = require("cors");
 const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
@@ -14,7 +13,7 @@ app.use(express.static(__dirname));
 const PORT = process.env.PORT || 3000;
 const DELAY = parseInt(process.env.DELAY_MS) || 30000;
 
-let clients = {};
+let clients = {}; // {accountName: {client, phone}}
 let stats = { success: 0, fail: 0 };
 let memberLogs = [];
 let floodWaits = []; // {username, account, endTimeMs, remainingSec}
@@ -32,12 +31,23 @@ for (let i = 1; i <= 10; i++) {
   }
 }
 
+// Auto connect all accounts
+async function connectAllAccounts() {
+  for (const name in clients) {
+    try {
+      if (!clients[name].client.connected) await clients[name].client.connect();
+      console.log(`✅ ${name} connected`);
+    } catch (err) {
+      console.log(`❌ Failed to connect ${name}: ${err.message}`);
+    }
+  }
+}
+
 // Utility: ensure joined
 async function ensureJoined(client, group){
-  try{
+  try {
     await client.getParticipants(group, { limit:1 });
-    return;
-  } catch{
+  } catch {
     if(group.includes("t.me/")){
       const hash = group.split("/").pop();
       if(hash) await client.invoke(new Api.messages.ImportChatInvite({ hash }));
@@ -47,10 +57,7 @@ async function ensureJoined(client, group){
 
 // Routes
 app.get("/accounts",(req,res)=>{
-  const list = Object.keys(clients).map(name=>({
-    name,
-    phone: clients[name].phone
-  }));
+  const list = Object.keys(clients).map(name=>({name, phone: clients[name].phone}));
   res.json(list);
 });
 
@@ -60,16 +67,16 @@ app.get("/flood-waits",(req,res)=>res.json(floodWaits));
 
 app.post("/export-members", async (req,res)=>{
   const { account, group } = req.body;
-  const acc = clients[account];
-  if(!acc) return res.json({success:false,error:"Account not found"});
-  try{
-    await acc.client.connect();
-    await ensureJoined(acc.client, group);
+  const accObj = clients[account];
+  if(!accObj) return res.json({success:false,error:"Account not found"});
+  try {
+    if(!accObj.client.connected) await accObj.client.connect();
+    await ensureJoined(accObj.client, group);
     let participants = [];
-    for await (const p of acc.client.iterParticipants(group)) participants.push(p);
-    const ids = participants.map(p=>p.username||p.id);
+    for await (const p of accObj.client.iterParticipants(group)) participants.push(p);
+    const ids = participants.map(p => p.username || p.id);
     res.json({success:true,ids});
-  }catch(err){
+  } catch(err){
     res.json({success:false,error:err.message});
   }
 });
@@ -79,53 +86,60 @@ app.post("/start", async (req,res)=>{
   if(!accounts || accounts.length===0) return res.json({message:"No accounts selected"});
   if(isRunning) return res.json({message:"Already running"});
 
+  await connectAllAccounts();
   isRunning = true;
   stats={success:0,fail:0};
   memberLogs=[];
   floodWaits=[];
-  let userIndex=0;
-  let accIndex=0;
 
-  const processNext = async ()=>{
+  let userIndex = 0;
+  let accIndex = 0;
+
+  const processNext = async () => {
     if(!isRunning || userIndex >= usernames.length){
-      isRunning=false;
+      isRunning = false;
       return;
     }
 
     const username = usernames[userIndex];
-    let attempts=0;
+    let attempts = 0;
     let clientObj;
+
     // Skip accounts in FLOOD_WAIT
-    do{
+    do {
       const accName = accounts[accIndex];
       clientObj = clients[accName];
-      accIndex=(accIndex+1)%accounts.length;
+      accIndex = (accIndex + 1) % accounts.length;
       attempts++;
-      if(attempts>accounts.length){
-        // all accounts in flood wait, wait 5s then retry
-        setTimeout(processNext,5000);
+      if(attempts > accounts.length){
+        // All accounts blocked, wait 10s then retry
+        setTimeout(processNext, 10000);
         return;
       }
-    }while(floodWaits.find(f=>f.account===Object.keys(clients)[accIndex] && Date.now()<f.endTimeMs));
+    } while (floodWaits.find(f => f.account === Object.keys(clients)[accIndex] && Date.now() < f.endTimeMs));
 
-    try{
+    try {
+      if(!clientObj.client.connected) await clientObj.client.connect();
       await ensureJoined(clientObj.client, group);
       await clientObj.client.invoke(new Api.channels.InviteToChannel({ channel: group, users:[username] }));
       stats.success++;
       memberLogs.push({username,status:"success",account:Object.keys(clients)[accIndex]});
+      console.log(`✅ ${username} added by ${Object.keys(clients)[accIndex]}`);
       userIndex++;
       setTimeout(processNext, DELAY);
-    }catch(err){
+    } catch(err){
       if(err.message.includes("FLOOD_WAIT")){
         const sec = parseInt(err.message.match(/\d+/)[0]);
-        const endTimeMs = Date.now()+sec*1000;
-        floodWaits.push({username,account:Object.keys(clients)[accIndex],endTimeMs,remainingSec:sec});
+        const endTimeMs = Date.now() + sec*1000;
+        floodWaits.push({username, account:Object.keys(clients)[accIndex], endTimeMs, remainingSec:sec});
         memberLogs.push({username,status:"fail",error:err.message,account:Object.keys(clients)[accIndex]});
+        console.log(`⚠ FLOOD_WAIT for ${Object.keys(clients)[accIndex]} (${sec}s)`);
         userIndex++;
         processNext();
       } else {
         stats.fail++;
         memberLogs.push({username,status:"fail",error:err.message,account:Object.keys(clients)[accIndex]});
+        console.log(`❌ Failed ${username} by ${Object.keys(clients)[accIndex]} - ${err.message}`);
         userIndex++;
         processNext();
       }
@@ -151,6 +165,7 @@ app.post("/retry", async (req,res)=>{
   const accName = accNames[Math.floor(Math.random()*accNames.length)];
   const clientObj = clients[accName];
   try{
+    if(!clientObj.client.connected) await clientObj.client.connect();
     await ensureJoined(clientObj.client, group);
     await clientObj.client.invoke(new Api.channels.InviteToChannel({ channel: group, users:[username] }));
     res.json({message:`${username} retried successfully with ${accName}`});
