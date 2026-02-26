@@ -5,17 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Telegram Add Member Ultimate</title>
 <style>
-body{background:#0f172a;color:#fff;font-family:sans-serif;padding:20px;display:flex;justify-content:center;}
-.container{width:100%;max-width:800px;background:#1e293b;padding:20px;border-radius:12px;}
-h2{color:#38bdf8;text-align:center;margin-bottom:15px;}
-input,textarea,select{width:100%;padding:8px;margin:5px 0;border-radius:8px;border:none;background:#0f172a;color:#fff;}
-textarea{height:100px;resize:vertical;}
-.accountsBox{max-height:150px;overflow-y:auto;border:1px solid #334155;padding:10px;border-radius:8px;}
-button{padding:10px 15px;margin:5px;border:none;border-radius:10px;cursor:pointer;font-weight:600;}
-.start{background:#38bdf8;} .stop{background:#f87171;} .restart{background:#fbbf24;}
-#memberList{margin-top:15px;max-height:300px;overflow-y:auto;background:#0f172a;border:1px solid #334155;padding:10px;border-radius:8px;font-family:monospace;}
-#memberList div{display:flex;align-items:center;gap:8px;margin-bottom:2px;}
-#memberList img{width:32px;height:32px;border-radius:50%;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:monospace;background:#0f172a;color:#fff;display:flex;justify-content:center;padding:20px;}
+.container{width:100%;max-width:750px;background:#1e293b;border-radius:20px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,0.5);}
+h2{text-align:center;color:#38bdf8;margin-bottom:15px;}
+input,textarea,select{width:100%;padding:10px;margin-top:6px;border-radius:8px;border:none;background:#0f172a;color:#fff;}
+textarea{height:120px;resize:vertical;}
+.accountsBox{max-height:200px;overflow-y:auto;background:#0f172a;padding:8px;border-radius:8px;border:1px solid #334155;}
+.accountsBox div{padding:4px 0;}
+.accountsBox label{cursor:pointer;}
+.accountsBox .blocked{color:red;font-weight:600;}
+.btns{display:flex;gap:10px;margin-top:15px;flex-wrap:wrap;}
+button{flex:1;padding:10px;border:none;border-radius:10px;font-weight:600;cursor:pointer;transition:all 0.3s;}
+.start{background:linear-gradient(90deg,#38bdf8,#0ea5e9);}
+.stop{background:linear-gradient(90deg,#f87171,#ef4444);}
+.restart{background:linear-gradient(90deg,#fbbf24,#f59e0b);}
+.stats{display:flex;justify-content:space-around;background:#0f172a;padding:10px;border-radius:10px;border:1px solid #334155;margin-top:10px;font-weight:600;}
+#memberList{margin-top:15px;height:300px;overflow-y:auto;background:#0f172a;padding:10px;border-radius:10px;border:1px solid #334155;font-family:monospace;font-size:14px;}
+#memberList div{padding:2px 0;}
+.floodWait{color:#fbbf24;}
 </style>
 </head>
 <body>
@@ -26,96 +34,151 @@ button{padding:10px 15px;margin:5px;border:none;border-radius:10px;cursor:pointe
 <div id="accountsList" class="accountsBox"></div>
 <label><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"> Select All</label>
 
-<h3>Source Group</h3>
+<h3>Source Group (Export Members)</h3>
 <input type="text" id="sourceGroup" placeholder="Source Group">
 <button class="start" onclick="exportMembers()">Export Members</button>
 
-<h3>Target Group</h3>
+<h3>Target Group (Add Members)</h3>
 <input type="text" id="targetGroup" placeholder="Target Group">
 
 <h3>Member IDs/Usernames</h3>
-<textarea id="users"></textarea>
+<textarea id="users" placeholder="IDs/Usernames"></textarea>
 
-<div>
+<div class="btns">
 <button class="start" onclick="start()">Start</button>
 <button class="stop" onclick="stop()">Stop</button>
 <button class="restart" onclick="restart()">Restart</button>
 </div>
 
-<div id="status"></div>
+<div class="stats">
+<div>Success: <span id="success">0</span></div>
+<div>Fail: <span id="fail">0</span></div>
+</div>
+
 <h3>Members Log & FLOOD_WAIT</h3>
 <div id="memberList"></div>
 </div>
 
 <script>
+// --- Frontend logic ---
 async function loadAccounts(){
-  const res = await fetch("/accounts"); const accounts=await res.json();
-  const container=document.getElementById("accountsList"); container.innerHTML="";
+  const res = await fetch("/accounts");
+  const accounts = await res.json();
+  const container = document.getElementById("accountsList");
+  container.innerHTML = "";
   accounts.forEach(acc=>{
-    const div=document.createElement("div");
-    div.innerHTML=`<label><input type="checkbox" class="accountChk" value="${acc.name}"> ${acc.name} (${acc.phone})</label>`;
+    const div = document.createElement("div");
+    div.innerHTML = `<label><input type="checkbox" class="accountChk" value="${acc.name}"> ${acc.name} (${acc.phone||""})</label>`;
     container.appendChild(div);
   });
 }
 loadAccounts();
 
 function toggleSelectAll(){
-  const checked=document.getElementById("selectAll").checked;
+  const checked = document.getElementById("selectAll").checked;
   document.querySelectorAll(".accountChk").forEach(chk=>chk.checked=checked);
 }
-
 function getSelectedAccounts(){
-  const selected=[]; document.querySelectorAll(".accountChk:checked").forEach(chk=>selected.push(chk.value)); return selected;
+  const selected = [];
+  document.querySelectorAll(".accountChk:checked").forEach(chk=>selected.push(chk.value));
+  return selected;
 }
 
 async function exportMembers(){
-  const accounts=getSelectedAccounts();
-  if(accounts.length===0){ alert("Select at least one account"); return; }
-  const group=document.getElementById("sourceGroup").value;
-  const account=accounts[0];
-  document.getElementById("status").innerText="Exporting...";
-  const res=await fetch("/export-members",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account,group})});
-  const data=await res.json();
+  const selectedAccounts = getSelectedAccounts();
+  if(selectedAccounts.length===0){ alert("Select at least one account"); return; }
+  const group = document.getElementById("sourceGroup").value.trim();
+  if(!group){ alert("Enter Source Group"); return; }
+  const account = selectedAccounts[0];
+
+  document.getElementById("memberList").innerHTML="";
+  document.getElementById("users").value="";
+  document.getElementById("status").innerText=`Joining group with ${account}...`;
+
+  const res = await fetch("/export-members",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ account, group })
+  });
+  const data = await res.json();
   if(data.success){
-    document.getElementById("users").value=data.ids.map(u=>u.username||u.id).join("\n");
-    window.memberPhotos = {}; data.ids.forEach(u=>{ if(u.photo) memberPhotos[u.username||u.id]=u.photo; });
-    document.getElementById("status").innerText=`Exported ${data.ids.length} members`;
-  }else document.getElementById("status").innerText=`Error: ${data.error}`;
+    document.getElementById("users").value=data.ids.join("\n");
+    document.getElementById("exportTotal").innerText=data.ids.length;
+    document.getElementById("status").innerText=`Exported ${data.ids.length} members from ${group}`;
+  } else {
+    document.getElementById("status").innerText=`Error: ${data.error}`;
+  }
 }
 
 async function start(){
   const group=document.getElementById("targetGroup").value;
-  const users=document.getElementById("users").value.split("\n").map(u=>u.trim()).filter(u=>u!="");
-  const accounts=getSelectedAccounts(); if(accounts.length===0){ alert("Select accounts"); return; }
-  const res=await fetch("/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({group,usernames:users,accounts})});
-  const data=await res.json(); document.getElementById("status").innerText=data.message;
+  const users=document.getElementById("users").value.split("\n").map(u=>u.trim()).filter(u=>u!=="");
+  const accounts=getSelectedAccounts();
+  if(accounts.length===0){ alert("Select at least one account"); return; }
+  document.getElementById("status").innerText="Adding members...";
+  document.getElementById("memberList").innerHTML="";
+
+  await fetch("/start",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ group, usernames:users, accounts })
+  }).then(res=>res.json()).then(data=>{
+    document.getElementById("status").innerText=data.message;
+  });
 }
 
-async function stop(){ const res=await fetch("/stop",{method:"POST"}); const data=await res.json(); document.getElementById("status").innerText=data.message; }
-async function restart(){ const res=await fetch("/restart",{method:"POST"}); const data=await res.json(); document.getElementById("status").innerText=data.message; loadAccounts(); document.getElementById("users").value=""; document.getElementById("memberList").innerHTML=""; }
+async function stop(){
+  const data=await fetch("/stop",{method:"POST"}).then(r=>r.json());
+  document.getElementById("status").innerText=data.message;
+}
+async function restart(){
+  const data=await fetch("/restart",{method:"POST"}).then(r=>r.json());
+  document.getElementById("status").innerText=data.message;
+  document.getElementById("success").innerText=0;
+  document.getElementById("fail").innerText=0;
+  document.getElementById("memberList").innerHTML="";
+  document.getElementById("users").value="";
+  loadAccounts();
+}
 
 async function updateUI(){
-  const statsRes=await fetch("/stats"); const stats=await statsRes.json();
-  const logsRes=await fetch("/member-logs"); const logs=await logsRes.json();
-  const floodRes=await fetch("/flood-waits"); const floods=await floodRes.json();
-  const memberList=document.getElementById("memberList"); memberList.innerHTML="";
+  const statsData=await fetch("/stats").then(r=>r.json());
+  document.getElementById("success").innerText=statsData.success;
+  document.getElementById("fail").innerText=statsData.fail;
+
+  const logs=await fetch("/member-logs").then(r=>r.json());
+  const memberList=document.getElementById("memberList");
+  memberList.innerHTML="";
   logs.forEach(l=>{
-    const div=document.createElement("div"); div.style.display="flex"; div.style.alignItems="center"; div.style.gap="8px";
-    if(window.memberPhotos && window.memberPhotos[l.username]){ const img=document.createElement("img"); img.src=window.memberPhotos[l.username]; div.appendChild(img);}
-    let line=""; if(l.status==="success") line=`✅ ${l.username} add by ${l.account}`;
+    let line="";
+    if(l.status==="success") line=`✅ ${l.username} add by ${l.account}`;
     else if(l.status==="fail") line=`❌ ${l.username} (${l.error||""}) add by ${l.account}`;
     else if(l.status==="skipped") line=`⚠ ${l.username} skipped (${l.reason||""}) add by ${l.account}`;
-    const span=document.createElement("span"); span.innerText=line; div.appendChild(span); memberList.appendChild(div);
-  });
-  floods.forEach(f=>{
-    if(new Date(f.endTime)<new Date()) return;
-    const div=document.createElement("div"); div.style.color="#fbbf24";
-    div.innerHTML=`⏳ ${f.username} on ${f.account} – Retry at <b>${f.endTime}</b> (<span id="countdown-${f.username}">${f.remainingSec}</span>s)`;
+    const div=document.createElement("div");
+    div.innerText=line;
     memberList.appendChild(div);
   });
+
+  const floodData=await fetch("/flood-waits").then(r=>r.json());
+  floodData.forEach(fw=>{
+    const exist=document.getElementById(`fw-${fw.username}`);
+    let div;
+    if(exist){
+      div=exist;
+      div.querySelector(".countdown").innerText=fw.remainingSec;
+    } else {
+      div=document.createElement("div");
+      div.id=`fw-${fw.username}`;
+      div.className="floodWait";
+      div.innerHTML=`⏳ ${fw.username} on ${fw.account} – Retry in <span class="countdown">${fw.remainingSec}</span>s`;
+      memberList.appendChild(div);
+    }
+  });
+
+  memberList.scrollTop = memberList.scrollHeight;
 }
+
 setInterval(updateUI,1000);
-setInterval(()=>{ document.querySelectorAll("[id^='countdown-']").forEach(span=>{ let s=parseInt(span.innerText); if(s>0) span.innerText=s-1; }); },1000);
 </script>
 </body>
 </html>
