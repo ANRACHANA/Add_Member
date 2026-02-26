@@ -6,172 +6,234 @@ const { StringSession } = require("telegram/sessions");
 const { Api } = require("telegram");
 
 const app = express();
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 app.use(express.static(__dirname));
 
 const PORT = process.env.PORT || 3000;
 const DELAY = parseInt(process.env.DELAY_MS) || 30000;
 
-let clients = {}; // {accountName: {client, phone}}
+let clients = {};
+let accountsInfo = {};
 let stats = { success: 0, fail: 0 };
 let memberLogs = [];
-let floodWaits = []; // {username, account, endTimeMs, remainingSec}
+let floodWaits = [];
 let isRunning = false;
 
-// Load accounts
+// --- Load accounts ---
 for (let i = 1; i <= 10; i++) {
   const apiId = process.env[`API_ID_${i}`];
   const apiHash = process.env[`API_HASH_${i}`];
   const session = process.env[`SESSION_${i}`];
-  const phone = process.env[`PHONE_${i}`] || "";
+  const phone = process.env[`PHONE_${i}`];
   if (apiId && apiHash && session) {
-    const client = new TelegramClient(new StringSession(session), parseInt(apiId), apiHash, { connectionRetries: 5 });
-    clients[`account${i}`] = { client, phone };
+    clients[`account${i}`] = new TelegramClient(
+      new StringSession(session),
+      parseInt(apiId),
+      apiHash,
+      { connectionRetries: 5 }
+    );
+    accountsInfo[`account${i}`] = { phone };
   }
 }
 
-// Auto connect all accounts
-async function connectAllAccounts() {
-  for (const name in clients) {
-    try {
-      if (!clients[name].client.connected) await clients[name].client.connect();
-      console.log(`✅ ${name} connected`);
-    } catch (err) {
-      console.log(`❌ Failed to connect ${name}: ${err.message}`);
-    }
-  }
-}
-
-// Utility: ensure joined
-async function ensureJoined(client, group){
+// --- Connect client helper ---
+async function connectClient(accountName) {
+  const client = clients[accountName];
   try {
-    await client.getParticipants(group, { limit:1 });
-  } catch {
-    if(group.includes("t.me/")){
-      const hash = group.split("/").pop();
-      if(hash) await client.invoke(new Api.messages.ImportChatInvite({ hash }));
-    }
+    if (!client.session.save()) await client.connect();
+    return true;
+  } catch (err) {
+    console.log(`❌ Failed to connect ${accountName}: ${err.message}`);
+    return false;
   }
 }
 
-// Routes
-app.get("/accounts",(req,res)=>{
-  const list = Object.keys(clients).map(name=>({name, phone: clients[name].phone}));
+// --- Auto join group ---
+async function ensureJoined(client, group) {
+  try {
+    await client.getParticipants(group, { limit: 1 });
+    return;
+  } catch {}
+  try {
+    let hash = null;
+    if (group.includes("t.me/")) hash = group.split("/").pop();
+    if (hash) await client.invoke(new Api.messages.ImportChatInvite({ hash }));
+  } catch {}
+}
+
+// --- Routes ---
+app.get("/accounts", (req, res) => {
+  const list = Object.keys(clients).map(name => ({ name, phone: accountsInfo[name]?.phone || "" }));
   res.json(list);
 });
 
-app.get("/stats",(req,res)=>res.json(stats));
-app.get("/member-logs",(req,res)=>res.json(memberLogs));
-app.get("/flood-waits",(req,res)=>res.json(floodWaits));
+app.get("/stats", (req, res) => res.json(stats));
+app.get("/member-logs", (req, res) => res.json(memberLogs));
+app.get("/flood-waits", (req, res) => {
+  const now = Date.now();
+  const data = floodWaits.map(fw => ({
+    ...fw,
+    remainingSec: Math.max(0, Math.floor((fw.endTimeMs - now) / 1000))
+  }));
+  res.json(data);
+});
 
-app.post("/export-members", async (req,res)=>{
+// --- Export members ---
+app.post("/export-members", async (req, res) => {
   const { account, group } = req.body;
-  const accObj = clients[account];
-  if(!accObj) return res.json({success:false,error:"Account not found"});
+  const client = clients[account];
+  if (!client) return res.json({ success: false, error: "Account not found" });
   try {
-    if(!accObj.client.connected) await accObj.client.connect();
-    await ensureJoined(accObj.client, group);
+    await connectClient(account);
+    await ensureJoined(client, group);
     let participants = [];
-    for await (const p of accObj.client.iterParticipants(group)) participants.push(p);
+    for await (const p of client.iterParticipants(group)) participants.push(p);
     const ids = participants.map(p => p.username || p.id);
-    res.json({success:true,ids});
-  } catch(err){
-    res.json({success:false,error:err.message});
+    res.json({ success: true, ids });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
   }
 });
 
-app.post("/start", async (req,res)=>{
+// --- Start adding members ---
+app.post("/start", async (req, res) => {
   const { group, usernames, accounts } = req.body;
-  if(!accounts || accounts.length===0) return res.json({message:"No accounts selected"});
-  if(isRunning) return res.json({message:"Already running"});
+  if (!accounts || accounts.length === 0) return res.json({ message: "No accounts selected" });
+  if (!group) return res.json({ message: "Target group required" });
+  if (isRunning) return res.json({ message: "Already running" });
 
-  await connectAllAccounts();
   isRunning = true;
-  stats={success:0,fail:0};
-  memberLogs=[];
-  floodWaits=[];
+  stats = { success: 0, fail: 0 };
+  memberLogs = [];
 
   let userIndex = 0;
-  let accIndex = 0;
+  let accountIndex = 0;
 
-  const processNext = async () => {
-    if(!isRunning || userIndex >= usernames.length){
+  async function processNext() {
+    if (!isRunning || userIndex >= usernames.length) {
       isRunning = false;
       return;
     }
 
     const username = usernames[userIndex];
+
+    // Select next available account not in FLOOD_WAIT
     let attempts = 0;
-    let clientObj;
-
-    // Skip accounts in FLOOD_WAIT
+    let client, accountName;
     do {
-      const accName = accounts[accIndex];
-      clientObj = clients[accName];
-      accIndex = (accIndex + 1) % accounts.length;
+      accountName = accounts[accountIndex];
+      client = clients[accountName];
+      accountIndex = (accountIndex + 1) % accounts.length;
       attempts++;
-      if(attempts > accounts.length){
-        // All accounts blocked, wait 10s then retry
-        setTimeout(processNext, 10000);
-        return;
-      }
-    } while (floodWaits.find(f => f.account === Object.keys(clients)[accIndex] && Date.now() < f.endTimeMs));
+    } while (floodWaits.find(fw => fw.account === accountName && Date.now() < fw.endTimeMs) && attempts <= accounts.length);
 
-    try {
-      if(!clientObj.client.connected) await clientObj.client.connect();
-      await ensureJoined(clientObj.client, group);
-      await clientObj.client.invoke(new Api.channels.InviteToChannel({ channel: group, users:[username] }));
-      stats.success++;
-      memberLogs.push({username,status:"success",account:Object.keys(clients)[accIndex]});
-      console.log(`✅ ${username} added by ${Object.keys(clients)[accIndex]}`);
+    if (!client) {
+      setTimeout(processNext, 5000);
+      return;
+    }
+
+    const connected = await connectClient(accountName);
+    if (!connected) {
+      stats.fail++;
+      memberLogs.push({ username, status: "fail", error: "Cannot connect account", account: accountName });
       userIndex++;
+      setTimeout(processNext, 1000);
+      return;
+    }
+
+    await ensureJoined(client, group);
+
+    // --- CHECK MEMBER EXISTENCE ---
+    let exists = false;
+    try {
+      const participants = await client.getParticipants(group, { limit: 1000 });
+      if (participants.some(p => p.username == username || p.id == username)) {
+        exists = true;
+      }
+    } catch {}
+
+    if (exists) {
+      memberLogs.push({ username, status: "skipped", reason: "Already in group", account: accountName });
+      userIndex++;
+      processNext();
+      return;
+    }
+
+    // --- TRY ADD MEMBER ---
+    try {
+      await client.invoke(new Api.channels.InviteToChannel({ channel: group, users: [username] }));
+      stats.success++;
+      memberLogs.push({ username, status: "success", account: accountName });
+      console.log(`✅ ${username} added by ${accountName}`);
+      userIndex++;
+      // Delay after success, switch account
       setTimeout(processNext, DELAY);
-    } catch(err){
-      if(err.message.includes("FLOOD_WAIT")){
-        const sec = parseInt(err.message.match(/\d+/)[0]);
-        const endTimeMs = Date.now() + sec*1000;
-        floodWaits.push({username, account:Object.keys(clients)[accIndex], endTimeMs, remainingSec:sec});
-        memberLogs.push({username,status:"fail",error:err.message,account:Object.keys(clients)[accIndex]});
-        console.log(`⚠ FLOOD_WAIT for ${Object.keys(clients)[accIndex]} (${sec}s)`);
+    } catch (err) {
+      const msg = err.message || "";
+      if (msg.includes("FLOOD_WAIT") || msg.includes("PEER_FLOOD")) {
+        const waitSec = parseInt(msg.match(/\d+/)?.[0]) || 60;
+        const endTimeMs = Date.now() + waitSec * 1000;
+        floodWaits.push({ username, account: accountName, endTimeMs, remainingSec: waitSec });
+        memberLogs.push({ username, status: "fail", error: msg, account: accountName });
+        console.log(`⏳ ${accountName} FLOOD_WAIT ${waitSec}s`);
         userIndex++;
-        processNext();
+        setTimeout(processNext, 1000);
+      } else if (msg.includes("USER_PRIVACY") || msg.includes("USER_ALREADY") || msg.includes("USER_NOT_FOUND")) {
+        stats.fail++;
+        memberLogs.push({ username, status: "skipped", reason: msg, account: accountName });
+        console.log(`⚠ ${username} skipped (${msg})`);
+        userIndex++;
+        setTimeout(processNext, 1000);
       } else {
         stats.fail++;
-        memberLogs.push({username,status:"fail",error:err.message,account:Object.keys(clients)[accIndex]});
-        console.log(`❌ Failed ${username} by ${Object.keys(clients)[accIndex]} - ${err.message}`);
+        memberLogs.push({ username, status: "fail", error: msg, account: accountName });
+        console.log(`❌ Failed ${username} - ${msg}`);
         userIndex++;
-        processNext();
+        // Delay 40s on failure
+        setTimeout(processNext, 40000);
       }
     }
-  };
+  }
 
   processNext();
-  res.json({message:`Started with ${accounts.length} accounts, delay ${DELAY/1000}s`});
+  res.json({ message: `Started with ${accounts.length} accounts, delay ${DELAY / 1000}s` });
 });
 
-app.post("/stop",(req,res)=>{isRunning=false;res.json({message:"Stopped"});});
-app.post("/restart",(req,res)=>{
-  isRunning=false;
-  stats={success:0,fail:0};
-  memberLogs=[];
-  floodWaits=[];
-  res.json({message:"Restarted"});
+// --- Stop ---
+app.post("/stop", (req, res) => {
+  isRunning = false;
+  res.json({ message: "Stopped" });
 });
 
-app.post("/retry", async (req,res)=>{
+// --- Restart ---
+app.post("/restart", (req, res) => {
+  isRunning = false;
+  stats = { success: 0, fail: 0 };
+  memberLogs = [];
+  floodWaits = [];
+  res.json({ message: "Restarted" });
+});
+
+// --- Retry single user ---
+app.post("/retry", async (req, res) => {
   const { username, group } = req.body;
-  const accNames = Object.keys(clients);
-  const accName = accNames[Math.floor(Math.random()*accNames.length)];
-  const clientObj = clients[accName];
-  try{
-    if(!clientObj.client.connected) await clientObj.client.connect();
-    await ensureJoined(clientObj.client, group);
-    await clientObj.client.invoke(new Api.channels.InviteToChannel({ channel: group, users:[username] }));
-    res.json({message:`${username} retried successfully with ${accName}`});
-  }catch(err){
-    res.json({error:err.message});
+  const availableAccounts = Object.keys(clients);
+  if (!availableAccounts.length) return res.json({ error: "No accounts available" });
+
+  const accountName = availableAccounts[Math.floor(Math.random() * availableAccounts.length)];
+  const client = clients[accountName];
+
+  const connected = await connectClient(accountName);
+  if (!connected) return res.json({ error: `Cannot connect ${accountName}` });
+
+  try {
+    await ensureJoined(client, group);
+    await client.invoke(new Api.channels.InviteToChannel({ channel: group, users: [username] }));
+    res.json({ message: `${username} retried successfully with ${accountName}` });
+  } catch (err) {
+    res.json({ error: err.message });
   }
 });
 
-app.listen(PORT,()=>console.log(`Server running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
