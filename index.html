@@ -5,28 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Telegram Add Member Ultimate</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;padding:20px;}
-.container{width:100%;max-width:750px;background:#1e293b;border-radius:15px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,0.5);}
-h2{text-align:center;color:#38bdf8;margin-bottom:20px;}
-input,textarea,select{width:100%;padding:10px;margin-top:5px;border-radius:8px;border:none;background:#0f172a;color:#fff;}
-textarea{height:100px;resize:vertical;}
-.accountsBox{max-height:150px;overflow-y:auto;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;margin-bottom:10px;}
-.accountsBox div{padding:4px 0;}
-.accountsBox label{cursor:pointer;}
-.accountsBox .blocked{color:#fbbf24;font-weight:600;}
-.btns{display:flex;gap:10px;margin-top:15px;flex-wrap:wrap;}
-button{flex:1;padding:10px;border:none;border-radius:10px;font-weight:600;cursor:pointer;transition:all 0.3s;}
-.start{background:linear-gradient(90deg,#38bdf8,#0ea5e9);}
-.stop{background:linear-gradient(90deg,#f87171,#ef4444);}
-.restart{background:linear-gradient(90deg,#fbbf24,#f59e0b);}
-.stats{display:flex;justify-content:space-around;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;margin-top:10px;font-weight:600;}
-#status{margin-top:10px;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;min-height:40px;line-height:1.4;}
-#memberList{margin-top:10px;height:300px;overflow-y:auto;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;font-family:monospace;font-size:14px;white-space:pre-wrap;}
-#memberList div{padding:2px 0;}
+* {box-sizing: border-box; margin:0; padding:0;}
+body {font-family: monospace; background:#0f172a; color:#fff; display:flex; justify-content:center; padding:20px;}
+.container {width:100%; max-width:750px; background:#1e293b; border-radius:20px; padding:20px; box-shadow:0 10px 30px rgba(0,0,0,0.5);}
+h2 {text-align:center; color:#38bdf8; margin-bottom:15px;}
+input, textarea, select {width:100%; padding:10px; margin-top:6px; border-radius:8px; border:none; background:#0f172a; color:#fff;}
+textarea {height:120px; resize:vertical;}
+.accountsBox {max-height:200px; overflow-y:auto; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #334155;}
+.accountsBox div {padding:4px 0;}
+.accountsBox label {cursor:pointer;}
+.accountsBox .blocked {color:red; font-weight:600;}
+.btns {display:flex; gap:10px; margin-top:15px; flex-wrap:wrap;}
+button {flex:1; padding:10px; border:none; border-radius:10px; font-weight:600; cursor:pointer; transition:all 0.3s;}
+.start {background:linear-gradient(90deg,#38bdf8,#0ea5e9);}
+.stop {background:linear-gradient(90deg,#f87171,#ef4444);}
+.restart {background:linear-gradient(90deg,#fbbf24,#f59e0b);}
+.stats {display:flex; justify-content:space-around; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #334155; margin-top:10px; font-weight:600;}
+#status {margin-top:15px; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #334155; min-height:40px; line-height:1.4;}
+#memberList {margin-top:15px; height:300px; overflow-y:auto; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #334155; font-family: monospace; font-size:14px;}
+#memberList div {padding:2px 0;}
 label input[type="checkbox"]{margin-right:6px;}
-.floodWait{color:#fbbf24;}
-@media(max-width:600px){.btns{flex-direction:column;}}
+.floodWait {color:#fbbf24;}
 </style>
 </head>
 <body>
@@ -68,6 +67,7 @@ label input[type="checkbox"]{margin-right:6px;}
 <div style="margin-top:10px;font-weight:600;">
   Export Total: <span id="exportTotal">0</span>
 </div>
+
 <button class="start" onclick="exportMembers()">Export Members</button>
 
 <h3>Target Group (Add Members)</h3>
@@ -87,7 +87,9 @@ label input[type="checkbox"]{margin-right:6px;}
 <div>Fail: <span id="fail">0</span></div>
 </div>
 
+<h3>Status</h3>
 <div id="status"></div>
+
 <h3>Members Log & FLOOD_WAIT</h3>
 <div id="memberList"></div>
 </div>
@@ -99,8 +101,8 @@ async function loadAccounts(){
   const container = document.getElementById("accountsList");
   container.innerHTML = "";
   accounts.forEach(acc=>{
-    const div=document.createElement("div");
-    div.innerHTML=`<label><input type="checkbox" class="accountChk" value="${acc.name}"> ${acc.name} (${acc.phone})</label>`;
+    const div = document.createElement("div");
+    div.innerHTML = `<label><input type="checkbox" class="accountChk" value="${acc.name}"> ${acc.name} (${acc.phone||""})</label>`;
     container.appendChild(div);
   });
 }
@@ -111,7 +113,7 @@ function toggleSelectAll(){
   document.querySelectorAll(".accountChk").forEach(chk=>chk.checked=checked);
 }
 function getSelectedAccounts(){
-  const selected=[];
+  const selected = [];
   document.querySelectorAll(".accountChk:checked").forEach(chk=>selected.push(chk.value));
   return selected;
 }
@@ -121,48 +123,47 @@ async function exportMembers(){
   if(selectedAccounts.length===0){ alert("Select at least one account"); return; }
   const group = document.getElementById("sourceGroup").value;
   const account = selectedAccounts[0];
-  document.getElementById("status").innerText="Loading members...";
-  const res = await fetch("/export-members",{
+  const res = await fetch("/export-members", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({account, group})
+    body: JSON.stringify({ account, group })
   });
   const data = await res.json();
   if(data.success){
-    document.getElementById("users").value=data.ids.join("\n");
-    document.getElementById("exportTotal").innerText=data.ids.length;
-    document.getElementById("status").innerText=`Exported ${data.ids.length} members`;
+    document.getElementById("users").value = data.ids.join("\n");
+    document.getElementById("exportTotal").innerText = data.ids.length;
+    document.getElementById("status").innerText = `Exported ${data.ids.length} members`;
   } else {
-    document.getElementById("status").innerText=`Error: ${data.error}`;
+    document.getElementById("status").innerText = `Error: ${data.error}`;
   }
 }
 
 async function start(){
-  const group=document.getElementById("targetGroup").value;
-  const users=document.getElementById("users").value.split("\n").map(u=>u.trim()).filter(u=>u!=="");
-  const accounts=getSelectedAccounts();
+  const group = document.getElementById("targetGroup").value;
+  const users = document.getElementById("users").value.split("\n").map(u=>u.trim()).filter(u=>u!=="");
+  const accounts = getSelectedAccounts();
   if(accounts.length===0){ alert("Select at least one account"); return; }
   document.getElementById("status").innerText="Adding members...";
   document.getElementById("memberList").innerHTML="";
 
-  const res = await fetch("/start",{
+  const res = await fetch("/start", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({group, usernames:users, accounts})
+    body:JSON.stringify({ group, usernames: users, accounts })
   });
   const data = await res.json();
   document.getElementById("status").innerText=data.message;
 }
 
 async function stop(){
-  const res=await fetch("/stop",{method:"POST"});
-  const data=await res.json();
+  const res = await fetch("/stop",{method:"POST"});
+  const data = await res.json();
   document.getElementById("status").innerText=data.message;
 }
 
 async function restart(){
-  const res=await fetch("/restart",{method:"POST"});
-  const data=await res.json();
+  const res = await fetch("/restart",{method:"POST"});
+  const data = await res.json();
   document.getElementById("status").innerText=data.message;
   document.getElementById("success").innerText=0;
   document.getElementById("fail").innerText=0;
@@ -172,48 +173,48 @@ async function restart(){
 }
 
 async function updateUI(){
+  // Update stats
   const statsRes = await fetch("/stats");
   const statsData = await statsRes.json();
   document.getElementById("success").innerText=statsData.success;
   document.getElementById("fail").innerText=statsData.fail;
 
-  const logsRes = await fetch("/member-logs");
-  const logs = await logsRes.json();
-  const memberLog = document.getElementById("memberList");
-  memberLog.innerHTML="";
+  // Update logs
+  const logRes = await fetch("/member-logs");
+  const logs = await logRes.json();
+  const memberList = document.getElementById("memberList");
+  memberList.innerHTML="";
   logs.forEach(l=>{
-    let text="";
-    if(l.status==="success") text=`✅ ${l.username} add by ${l.account}`;
-    else if(l.status==="fail") text=`❌ ${l.username} (${l.error}) add by ${l.account}`;
-    else if(l.status==="skipped") text=`⚠️ ${l.username} skipped (${l.reason}) add by ${l.account}`;
-    const div=document.createElement("div");
-    div.innerText=text;
-    memberLog.appendChild(div);
+    let line="";
+    if(l.status==="success") line=`✅ ${l.username} add by ${l.account}`;
+    else if(l.status==="fail") line=`❌ ${l.username} (${l.error||""}) add by ${l.account}`;
+    else if(l.status==="skipped") line=`⚠ ${l.username} skipped (${l.reason||""}) add by ${l.account}`;
+    const div = document.createElement("div");
+    div.innerText=line;
+    memberList.appendChild(div);
   });
 
+  // Update FLOOD_WAIT countdown
   const floodRes = await fetch("/flood-waits");
   const floodData = await floodRes.json();
   floodData.forEach(fw=>{
-    if(Date.now()>fw.endTimeMs) return;
-    const div=document.createElement("div");
-    div.className="floodWait";
-    div.id=`fw-${fw.username}`;
-    div.innerHTML=`⏳ ${fw.username} on ${fw.account} – Retry in <span>${fw.remainingSec}</span>s`;
-    memberLog.appendChild(div);
+    const exist = document.getElementById(`fw-${fw.username}`);
+    let div;
+    if(exist){
+      div=exist;
+      div.querySelector(".countdown").innerText=fw.remainingSec;
+    } else {
+      div=document.createElement("div");
+      div.id=`fw-${fw.username}`;
+      div.className="floodWait";
+      div.innerHTML=`⏳ ${fw.username} on ${fw.account} – Retry in <span class="countdown">${fw.remainingSec}</span>s`;
+      memberList.appendChild(div);
+    }
   });
 
-  // Auto scroll to bottom
-  memberLog.scrollTop = memberLog.scrollHeight;
+  // Scroll to bottom
+  memberList.scrollTop = memberList.scrollHeight;
 }
-
-// Countdown FLOOD_WAIT
-setInterval(()=>{
-  document.querySelectorAll(".floodWait span").forEach(span=>{
-    let sec=parseInt(span.innerText);
-    if(sec>0) sec--;
-    span.innerText=sec;
-  });
-},1000);
 
 setInterval(updateUI,1000);
 </script>
