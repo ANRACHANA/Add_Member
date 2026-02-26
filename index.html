@@ -5,153 +5,102 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Telegram Add Member Ultimate</title>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: sans-serif; background: #0f172a; color: #fff; display: flex; justify-content: center; padding: 20px; }
-.container { width: 100%; max-width: 750px; background: #1e293b; border-radius: 20px; padding: 30px; box-shadow: 0 15px 40px rgba(0,0,0,0.5); }
-h2 { text-align: center; color: #38bdf8; margin-bottom: 20px; }
-h3 { margin: 20px 0 10px; color: #a5b4fc; }
-input, textarea, select { width: 100%; padding: 12px; margin-top: 8px; border-radius: 10px; border: none; background: #0f172a; color: #fff; }
-textarea { height: 120px; resize: vertical; }
-.accountsBox { max-height: 200px; overflow-y: auto; background: #0f172a; padding: 10px; border-radius: 10px; border: 1px solid #334155; }
-.accountsBox div { padding: 5px 0; }
-.accountsBox label { cursor: pointer; }
-.accountsBox .blocked { color: red; font-weight: 600; }
-.btns { display: flex; gap: 15px; margin-top: 20px; flex-wrap: wrap; }
-button { flex: 1; padding: 12px; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s; }
-.start { background: linear-gradient(90deg,#38bdf8,#0ea5e9); }
-.stop { background: linear-gradient(90deg,#f87171,#ef4444); }
-.restart { background: linear-gradient(90deg,#fbbf24,#f59e0b); }
-.stats { display: flex; justify-content: space-around; background: #0f172a; padding: 15px 10px; border-radius: 12px; border: 1px solid #334155; margin-top: 15px; font-weight: 600; }
-
-#statusBox h3 { color:#a5b4fc; margin-bottom:5px; }
-
-/* Status box */
-#status {
-  background:#111827;
-  padding:10px;
-  border-radius:8px;
-  border:1px solid #334155;
-  min-height:40px;
-  max-height:50px;
-  overflow-y:auto;
-  font-family: monospace;
-  color:#38bdf8;
-  margin-bottom:10px;
-}
-
-/* Members log box */
-#memberList {
-  background:#111827;
-  padding:10px;
-  border-radius:8px;
-  border:1px solid #334155;
-  height:300px;
-  overflow-y:auto;
-  font-family: monospace;
-  color:#f8fafc;
-  white-space: pre-wrap;
-  box-shadow: inset 0 0 5px rgba(0,0,0,0.5);
-}
-
-/* FLOOD_WAIT items */
-.floodWait { color:#fbbf24; margin:5px 0; display:flex; justify-content:space-between; align-items:center; }
-.floodWait button { flex:none; padding:4px 8px; font-size:12px; border-radius:6px; cursor:pointer; }
-
-/* Custom scrollbar */
-#memberList::-webkit-scrollbar { width:8px; }
-#memberList::-webkit-scrollbar-track { background:#1e293b; border-radius:4px; }
-#memberList::-webkit-scrollbar-thumb { background:#334155; border-radius:4px; }
-
-@media(max-width:600px){ .btns{flex-direction:column;} }
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;padding:20px;}
+.container{width:100%;max-width:750px;background:#1e293b;border-radius:15px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,0.5);}
+h2{text-align:center;color:#38bdf8;margin-bottom:20px;}
+input,textarea,select{width:100%;padding:10px;margin-top:5px;border-radius:8px;border:none;background:#0f172a;color:#fff;}
+textarea{height:100px;resize:vertical;}
+.accountsBox{max-height:150px;overflow-y:auto;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;margin-bottom:10px;}
+.accountsBox div{padding:4px 0;}
+.accountsBox label{cursor:pointer;}
+.accountsBox .blocked{color:#fbbf24;font-weight:600;}
+.btns{display:flex;gap:10px;margin-top:15px;flex-wrap:wrap;}
+button{flex:1;padding:10px;border:none;border-radius:10px;font-weight:600;cursor:pointer;transition:all 0.3s;}
+.start{background:linear-gradient(90deg,#38bdf8,#0ea5e9);}
+.stop{background:linear-gradient(90deg,#f87171,#ef4444);}
+.restart{background:linear-gradient(90deg,#fbbf24,#f59e0b);}
+.stats{display:flex;justify-content:space-around;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;margin-top:10px;font-weight:600;}
+#status{margin-top:10px;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;min-height:40px;line-height:1.4;}
+#memberList{margin-top:10px;height:300px;overflow-y:auto;background:#0f172a;padding:10px;border-radius:8px;border:1px solid #334155;font-family:monospace;font-size:14px;white-space:pre-wrap;}
+#memberList div{padding:2px 0;}
+label input[type="checkbox"]{margin-right:6px;}
+.floodWait{color:#fbbf24;}
+@media(max-width:600px){.btns{flex-direction:column;}}
 </style>
 </head>
 <body>
 <div class="container">
-  <h2>Telegram Add Member Ultimate</h2>
+<h2>Telegram Add Member Ultimate</h2>
 
-  <h3>Select Accounts</h3>
-  <div id="accountsList" class="accountsBox"></div>
-  <label><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"> Select All</label>
+<h3>Select Accounts</h3>
+<div id="accountsList" class="accountsBox"></div>
+<label><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"> Select All</label>
 
-  <h3>Source Group (Export Members)</h3>
-  <input type="text" id="sourceGroup" placeholder="Source Group URL or ID">
+<h3>Source Group (Export Members)</h3>
+<input type="text" id="sourceGroup" placeholder="Source Group">
 
-  <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
-    <div>
-      <label>Members:</label>
-      <select id="filterMembers">
-        <option value="all" selected>All</option>
-        <option value="username">Username Only</option>
-      </select>
-    </div>
-    <div>
-      <label>Last Online:</label>
-      <select id="filterLastOnline">
-        <option value="all" selected>All</option>
-        <option value="week">This Week</option>
-        <option value="month">This Month</option>
-      </select>
-    </div>
-    <div>
-      <label>Profile Photo:</label>
-      <select id="filterPhoto">
-        <option value="all" selected>All</option>
-        <option value="has">Has Photo</option>
-      </select>
-    </div>
+<div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+  <div>
+    <label>Members:</label>
+    <select id="filterMembers">
+      <option value="all" selected>All</option>
+      <option value="username">Username Only</option>
+    </select>
   </div>
-
-  <div style="margin-top:10px;font-weight:600;">
-    Export Total: <span id="exportTotal">0</span>
+  <div>
+    <label>Last Online:</label>
+    <select id="filterLastOnline">
+      <option value="all" selected>All</option>
+      <option value="week">This Week</option>
+      <option value="month">This Month</option>
+    </select>
   </div>
-  <button class="start" onclick="exportMembers()">Export Members</button>
-
-  <h3>Target Group (Add Members)</h3>
-  <input type="text" id="targetGroup" placeholder="Target Group URL or ID">
-
-  <h3>Member IDs/Usernames</h3>
-  <textarea id="users" placeholder="IDs/Usernames"></textarea>
-
-  <div class="btns">
-    <button class="start" onclick="start()">Start</button>
-    <button class="stop" onclick="stop()">Stop</button>
-    <button class="restart" onclick="restart()">Restart</button>
+  <div>
+    <label>Profile Photo:</label>
+    <select id="filterPhoto">
+      <option value="all" selected>All</option>
+      <option value="has">Has Photo</option>
+    </select>
   </div>
+</div>
 
-  <div class="stats">
-    <div>Success: <span id="success">0</span></div>
-    <div>Fail: <span id="fail">0</span></div>
-  </div>
+<div style="margin-top:10px;font-weight:600;">
+  Export Total: <span id="exportTotal">0</span>
+</div>
+<button class="start" onclick="exportMembers()">Export Members</button>
 
-  <!-- CMD-style status & log -->
-  <div id="statusBox">
-    <h3>Status & Members Log</h3>
-    <div id="status"></div>
-    <div id="memberList"></div>
-  </div>
+<h3>Target Group (Add Members)</h3>
+<input type="text" id="targetGroup" placeholder="Target Group">
+
+<h3>Member IDs/Usernames</h3>
+<textarea id="users" placeholder="IDs/Usernames"></textarea>
+
+<div class="btns">
+<button class="start" onclick="start()">Start</button>
+<button class="stop" onclick="stop()">Stop</button>
+<button class="restart" onclick="restart()">Restart</button>
+</div>
+
+<div class="stats">
+<div>Success: <span id="success">0</span></div>
+<div>Fail: <span id="fail">0</span></div>
+</div>
+
+<div id="status"></div>
+<h3>Members Log & FLOOD_WAIT</h3>
+<div id="memberList"></div>
 </div>
 
 <script>
 async function loadAccounts(){
   const res = await fetch("/accounts");
   const accounts = await res.json();
-  const floodRes = await fetch("/flood-waits");
-  const floodData = await floodRes.json();
   const container = document.getElementById("accountsList");
   container.innerHTML = "";
-
   accounts.forEach(acc=>{
-    const fw = floodData.find(f=>f.account===acc.name && new Date(f.endTime) > new Date());
-    const isBlocked = !!fw;
-    const labelText = isBlocked
-      ? `${acc.name} (${acc.phone}) – Retry at ${fw.endTime}`
-      : `${acc.name} (${acc.phone})`;
-    const div = document.createElement("div");
-    div.className = isBlocked ? "blocked" : "";
-    div.innerHTML = `<label>
-      <input type="checkbox" class="accountChk" value="${acc.name}" ${isBlocked?'disabled':''}>
-      ${labelText}
-    </label>`;
+    const div=document.createElement("div");
+    div.innerHTML=`<label><input type="checkbox" class="accountChk" value="${acc.name}"> ${acc.name} (${acc.phone})</label>`;
     container.appendChild(div);
   });
 }
@@ -159,9 +108,8 @@ loadAccounts();
 
 function toggleSelectAll(){
   const checked = document.getElementById("selectAll").checked;
-  document.querySelectorAll(".accountChk:not(:disabled)").forEach(chk=>chk.checked=checked);
+  document.querySelectorAll(".accountChk").forEach(chk=>chk.checked=checked);
 }
-
 function getSelectedAccounts(){
   const selected=[];
   document.querySelectorAll(".accountChk:checked").forEach(chk=>selected.push(chk.value));
@@ -173,15 +121,11 @@ async function exportMembers(){
   if(selectedAccounts.length===0){ alert("Select at least one account"); return; }
   const group = document.getElementById("sourceGroup").value;
   const account = selectedAccounts[0];
-  const filterMembers = document.getElementById("filterMembers").value;
-  const filterLastOnline = document.getElementById("filterLastOnline").value;
-  const filterPhoto = document.getElementById("filterPhoto").value;
-
   document.getElementById("status").innerText="Loading members...";
   const res = await fetch("/export-members",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({account, group, filterMembers, filterLastOnline, filterPhoto})
+    body:JSON.stringify({account, group})
   });
   const data = await res.json();
   if(data.success){
@@ -210,21 +154,21 @@ async function start(){
   document.getElementById("status").innerText=data.message;
 }
 
-async function stop(){ 
-  const res=await fetch("/stop",{method:"POST"}); 
-  const data=await res.json(); 
-  document.getElementById("status").innerText=data.message; 
+async function stop(){
+  const res=await fetch("/stop",{method:"POST"});
+  const data=await res.json();
+  document.getElementById("status").innerText=data.message;
 }
 
-async function restart(){ 
-  const res=await fetch("/restart",{method:"POST"}); 
-  const data=await res.json(); 
-  document.getElementById("status").innerText=data.message; 
-  document.getElementById("success").innerText=0; 
-  document.getElementById("fail").innerText=0; 
+async function restart(){
+  const res=await fetch("/restart",{method:"POST"});
+  const data=await res.json();
+  document.getElementById("status").innerText=data.message;
+  document.getElementById("success").innerText=0;
+  document.getElementById("fail").innerText=0;
   document.getElementById("memberList").innerHTML="";
-  document.getElementById("exportTotal").innerText = 0;
-  loadAccounts(); 
+  document.getElementById("exportTotal").innerText=0;
+  loadAccounts();
 }
 
 async function updateUI(){
@@ -233,43 +177,38 @@ async function updateUI(){
   document.getElementById("success").innerText=statsData.success;
   document.getElementById("fail").innerText=statsData.fail;
 
-  const memberLog = document.getElementById("memberList");
-  memberLog.innerHTML="";
-
   const logsRes = await fetch("/member-logs");
   const logs = await logsRes.json();
+  const memberLog = document.getElementById("memberList");
+  memberLog.innerHTML="";
   logs.forEach(l=>{
+    let text="";
+    if(l.status==="success") text=`✅ ${l.username} add by ${l.account}`;
+    else if(l.status==="fail") text=`❌ ${l.username} (${l.error}) add by ${l.account}`;
+    else if(l.status==="skipped") text=`⚠️ ${l.username} skipped (${l.reason}) add by ${l.account}`;
     const div=document.createElement("div");
-    if(l.status==="success") div.innerText=`✅ ${l.username} add by ${l.account}`;
-    else if(l.status==="fail") div.innerText=`❌ ${l.username} (${l.error}) add by ${l.account}`;
-    else if(l.status==="skipped") div.innerText=`⚠️ ${l.username} skipped (${l.reason}) add by ${l.account}`;
+    div.innerText=text;
     memberLog.appendChild(div);
   });
 
   const floodRes = await fetch("/flood-waits");
   const floodData = await floodRes.json();
   floodData.forEach(fw=>{
+    if(Date.now()>fw.endTimeMs) return;
     const div=document.createElement("div");
     div.className="floodWait";
-    div.innerHTML=`⏳ ${fw.username} on ${fw.account} – Retry at <b>${fw.endTime}</b> (<span id="countdown-${fw.username}">${fw.remainingSec}</span>s)`;
-    const btn=document.createElement("button");
-    btn.innerText="Retry Now";
-    btn.onclick=async ()=>{
-      const res = await fetch("/retry",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({username:fw.username, group:document.getElementById("targetGroup").value})
-      });
-      const data=await res.json();
-      alert(data.message || data.error);
-    };
-    div.appendChild(btn);
+    div.id=`fw-${fw.username}`;
+    div.innerHTML=`⏳ ${fw.username} on ${fw.account} – Retry in <span>${fw.remainingSec}</span>s`;
     memberLog.appendChild(div);
   });
+
+  // Auto scroll to bottom
+  memberLog.scrollTop = memberLog.scrollHeight;
 }
 
+// Countdown FLOOD_WAIT
 setInterval(()=>{
-  document.querySelectorAll("[id^='countdown-']").forEach(span=>{
+  document.querySelectorAll(".floodWait span").forEach(span=>{
     let sec=parseInt(span.innerText);
     if(sec>0) sec--;
     span.innerText=sec;
