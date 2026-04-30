@@ -23,7 +23,6 @@ const db = getDatabase()
 // ===== Accounts =====
 const accounts = []
 const clients = {}
-const MAX_CLIENTS = 3
 setInterval(async () => {
   for (const id in clients) {
     try {
@@ -110,107 +109,106 @@ while(process.env[`TG_ACCOUNT_${i}_PHONE`]){
 // ===== Telegram Client =====
 async function getClient(account){
 
-  const MAX_CLIENTS = 3
+  // ===== 1. CLEAN DEAD CLIENT =====
+  if(clients[account.id]){
+    try{
+      if(!clients[account.id].connected){
+        console.log(`🔄 Reconnecting cached ${account.phone}`)
+        await clients[account.id].connect()
+      }
 
-  // ===== 1. CLEAN DEAD / REUSE CLIENT =====
-  const cached = clients[account.id]
+      await clients[account.id].getMe()
+      return clients[account.id] // ✅ still valid
 
-  if (cached) {
-    try {
-      await cached.getMe()
-      return cached
-    } catch (err) {
-      try { await cached.disconnect() } catch {}
+    }catch(err){
+      console.log(`♻️ Removing dead client ${account.phone}`)
       delete clients[account.id]
     }
   }
 
-  // ===== 2. LIMIT CLIENT CACHE (PREVENT RAM LEAK) =====
-  const keys = Object.keys(clients)
-
-  if (keys.length >= MAX_CLIENTS) {
-    const removeCount = keys.length - MAX_CLIENTS + 1
-
-    for (let i = 0; i < removeCount; i++) {
-      const id = keys[i]
-
-      try {
-        await clients[id].disconnect()
-      } catch {}
-
-      delete clients[id]
-
-      console.log(`🧹 Removed old client: ${id}`)
-    }
-  }
-
-  // ===== 3. CREATE NEW CLIENT =====
+  // ===== 2. CREATE NEW CLIENT =====
   const client = new TelegramClient(
     new StringSession(account.session),
     account.api_id,
     account.api_hash,
     {
-      connectionRetries: 3,   // 🔥 reduced for Render
-      autoReconnect: false    // ❌ disable to avoid loop + RAM leak
+      connectionRetries: 5,
+      autoReconnect: false
     }
   )
 
-  try {
-
-    // ===== 4. CONNECT =====
+  try{
+    // ===== 3. CONNECT =====
     await client.connect()
 
-    // ===== 5. VERIFY SESSION =====
+    // ===== 4. VERIFY SESSION =====
     await client.getMe()
 
-    // ===== 6. SAVE SESSION ONLY IF NEEDED =====
+    // ===== 5. AUTO RECONNECT GUARD =====
+    client.addEventHandler(async () => {
+      try{
+        if(!client.connected){
+          console.log(`🔄 Auto reconnect ${account.phone}`)
+          await client.connect()
+        }
+      }catch(e){
+        console.log(`⚠️ Reconnect failed ${account.phone}`)
+      }
+    })
+
+    // ===== 6. SAVE SESSION (AUTO UPDATE) =====
     const newSession = client.session.save()
 
-    if (newSession && newSession !== account.session) {
+    if(newSession !== account.session){
       account.session = newSession
 
-      await update(ref(db, `accounts/${account.id}`), {
+      await update(ref(db,`accounts/${account.id}`),{
         session: newSession
       })
+
+      console.log(`🔄 Session updated ${account.phone}`)
     }
 
     // ===== 7. MARK ACTIVE =====
     account.status = "active"
     account.lastChecked = Date.now()
 
-    await update(ref(db, `accounts/${account.id}`), {
-      status: "active",
-      lastChecked: account.lastChecked,
-      floodWaitUntil: null
+    await update(ref(db,`accounts/${account.id}`),{
+      status:"active",
+      lastChecked:account.lastChecked,
+      floodWaitUntil:null
     })
 
-    // ===== 8. CACHE CLIENT =====
+    // ===== 8. SAVE CLIENT =====
     clients[account.id] = client
 
     return client
 
-  } catch (err) {
+  }catch(err){
 
     console.log(`❌ Client init failed ${account.phone}:`, err.message)
 
+    // ===== 9. HANDLE FLOODWAIT =====
     const wait = parseFlood(err)
 
-    if (wait) {
+    if(wait){
       const until = Date.now() + wait * 1000
 
       account.status = "floodwait"
       account.floodWaitUntil = until
 
-      await update(ref(db, `accounts/${account.id}`), {
-        status: "floodwait",
-        floodWaitUntil: until
+      await update(ref(db,`accounts/${account.id}`),{
+        status:"floodwait",
+        floodWaitUntil: until,
+        error: err.message
       })
 
-    } else {
+    }else{
+      // ===== 10. SESSION INVALID =====
       account.status = "error"
 
-      await update(ref(db, `accounts/${account.id}`), {
-        status: "error",
+      await update(ref(db,`accounts/${account.id}`),{
+        status:"error",
         error: err.message,
         lastChecked: Date.now()
       })
@@ -219,6 +217,7 @@ async function getClient(account){
     return null
   }
 }
+
 // ===== Flood Parse =====
 function parseFlood(err){
   const msg=err.message||""
@@ -360,36 +359,26 @@ async function autoJoin(client, group){
 }
 
 // ===== Auto Join All =====
-// ===== Auto Join All (SAFE VERSION) =====
-async function autoJoinAllAccounts(group){
-  const MAX_JOIN = 3   // 🔥 កំណត់ max account
+const MAX_JOIN = 3
 
+async function autoJoinAllAccounts(group){
   const selected = accounts.slice(0, MAX_JOIN)
 
   for(const acc of selected){
     let client = null
-
     try{
       client = await getClient(acc)
       if(!client) continue
 
       await autoJoin(client, group)
 
-      await sleep(3000) // 🔥 បន្ថែម delay
-
+      await sleep(2000)
     }catch(e){
-      console.log(`❌ Join error ${acc.phone}`)
+      console.log("join error", acc.phone)
     }
 
-    // 🔥 IMPORTANT: disconnect after use
-    try{
-      await client?.disconnect()
-    }catch{}
-
-    await sleep(2000)
+    try { await client?.disconnect() } catch {}
   }
-
-  console.log("✅ Auto join done (limited)")
 }
 
 // ===== Get Members =====
@@ -427,7 +416,7 @@ app.post('/members', async (req, res) => {
         participants = await client.getParticipants(entity, {
           offset,
           limit,
-          aggressive: false // ⚡ លឿន
+          aggressive: false// ⚡ លឿន
         })
         break
       } catch (e) {
@@ -558,7 +547,7 @@ app.post('/add-member', async (req, res) => {
     }
 
     // ================= PRO VERIFY ENGINE =================
-    await sleep(3000)
+    await sleep(7000)
 
     let joined = false
 
@@ -581,7 +570,16 @@ app.post('/add-member', async (req, res) => {
       }
     }
 
-   
+    // 3. BACKUP CHECK
+    if (!joined && user_id) {
+      try {
+        const list = await client.getParticipants(groupEntity, {
+          limit: 200
+        })
+
+        joined = list.some(p => p.id == user_id)
+      } catch {}
+    }
 
     // ================= RESULT =================
     if (joined) {
@@ -600,7 +598,7 @@ app.post('/add-member', async (req, res) => {
         timestamp: Date.now()
       })
 
-      await sleep(8000 + Math.floor(Math.random() * 4000))
+      await sleep(20000 + Math.floor(Math.random() * 10000))
 
       return res.json({
         status: "success",
