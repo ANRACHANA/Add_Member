@@ -25,19 +25,16 @@ const accounts = []
 const clients = {}
 setInterval(async () => {
   for (const id in clients) {
-    const client = clients[id]
-
     try {
-      await client.getMe() // 🔥 real check
+      const client = clients[id]
 
+      if (!client.connected) {
+        console.log(`🧹 Remove ${id}`)
+        await client.disconnect()
+        delete clients[id]
+      }
     } catch {
-      console.log(`🧹 Destroy ${id}`)
-
-      try { await client.disconnect() } catch {}
-
       delete clients[id]
-
-      if (global.gc) global.gc()
     }
   }
 }, 5 * 60 * 1000)
@@ -148,20 +145,16 @@ async function getClient(account){
     await client.getMe()
 
     // ===== 5. AUTO RECONNECT GUARD =====
-    if (!client._handlerAdded) {
-  client.addEventHandler(async () => {
-    try {
-      if (!client.connected) {
-        console.log(`🔄 Auto reconnect ${account.phone}`)
-        await client.connect()
+    client.addEventHandler(async () => {
+      try{
+        if(!client.connected){
+          console.log(`🔄 Auto reconnect ${account.phone}`)
+          await client.connect()
+        }
+      }catch(e){
+        console.log(`⚠️ Reconnect failed ${account.phone}`)
       }
-    } catch (e) {
-      console.log(`⚠️ Reconnect failed ${account.phone}`)
-    }
-  })
-
-  client._handlerAdded = true
-}
+    })
 
     // ===== 6. SAVE SESSION (AUTO UPDATE) =====
     const newSession = client.session.save()
@@ -371,21 +364,21 @@ const MAX_JOIN = 3
 async function autoJoinAllAccounts(group){
   const selected = accounts.slice(0, MAX_JOIN)
 
- for(const acc of selected){
-  let client = null
-  try{
-    client = await getClient(acc)
-    if(!client) continue
+  for(const acc of selected){
+    let client = null
+    try{
+      client = await getClient(acc)
+      if(!client) continue
 
-    await autoJoin(client, group)
+      await autoJoin(client, group)
 
-    await sleep(2000)
-  }catch(e){
-    console.log("join error", acc.phone)
+      await sleep(2000)
+    }catch(e){
+      console.log("join error", acc.phone)
+    }
+
+    try { await client?.disconnect() } catch {}
   }
-
-  try { await client?.disconnect() } catch {}
-}
 }
 
 // ===== Get Members =====
@@ -393,7 +386,7 @@ app.post('/members', async (req, res) => {
   try {
     let { group, offset = 0, limit = 50 } = req.body
 
-    // 🔒 limit max
+    // 🔒 កំណត់ limit អតិបរមា
     limit = Math.min(limit, 50)
 
     const acc = getAvailableAccount()
@@ -413,43 +406,36 @@ app.post('/members', async (req, res) => {
 
     const entity = await client.getEntity(cleanGroup)
 
+    // ⏱️ delay បន្តិច កាត់បន្ថយ flood
     await sleep(1500)
 
-    // ✅ NEW: streaming instead of loading all
-    let members = []
-    let count = 0
-
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // 🔁 retry system (ការពារ error)
+    let participants = []
+    for (let i = 0; i < 3; i++) {
       try {
-for await (const p of client.iterParticipants(entity)) {
-
-  if (p.bot) continue
-
-  members.push({
-    user_id: p.id,
-    username: p.username,
-    access_hash: p.access_hash
-  })
-
-  if (members.length >= limit) break
-
-  if (members.length % 10 === 0) {
-    await sleep(300)
-  }
-}
-
-        break // success
-
+        participants = await client.getParticipants(entity, {
+          offset,
+          limit,
+          aggressive: false// ⚡ លឿន
+        })
+        break
       } catch (e) {
-        console.log("Retry members...", attempt + 1)
         await sleep(2000)
       }
     }
 
+    const members = participants
+      .filter(p => !p.bot)
+      .map(p => ({
+        user_id: p.id,
+        username: p.username,
+        access_hash: p.access_hash
+      }))
+
     return res.json({
       members,
-      nextOffset: offset + members.length,
-      hasMore: members.length === limit
+      nextOffset: offset + participants.length,
+      hasMore: participants.length === limit
     })
 
   } catch (err) {
@@ -462,6 +448,7 @@ app.post('/add-member', async (req, res) => {
   try {
     let { username, user_id, access_hash, targetGroup } = req.body
 
+    // ================= VALIDATION =================
     if (!username && !user_id) {
       return res.json({
         status: "failed",
@@ -474,14 +461,14 @@ app.post('/add-member', async (req, res) => {
     if (!acc) {
       return res.json({
         status: "failed",
-        reason: "No available account",
+        reason: "No available account (FloodWait)",
         accountUsed: "none"
       })
     }
 
     const client = await getClient(acc)
 
-    // ===== GROUP =====
+    // ================= GROUP RESOLVE =================
     let groupEntity
     try {
       groupEntity = await client.getEntity(targetGroup)
@@ -493,7 +480,7 @@ app.post('/add-member', async (req, res) => {
       })
     }
 
-    // ===== USER =====
+    // ================= USER RESOLVE =================
     const cleanUsername = normalizeUsername(username)
 
     let userEntity
@@ -509,12 +496,12 @@ app.post('/add-member', async (req, res) => {
     } catch {
       return res.json({
         status: "skipped",
-        reason: "User not found",
+        reason: "User not found / private",
         accountUsed: acc.phone
       })
     }
 
-    // ===== CHECK EXIST =====
+    // ================= CHECK EXISTING =================
     try {
       await client.getParticipant(groupEntity, userEntity)
 
@@ -525,7 +512,7 @@ app.post('/add-member', async (req, res) => {
       })
     } catch {}
 
-    // ===== INVITE =====
+    // ================= INVITE =================
     try {
       await client.invoke(new Api.channels.InviteToChannel({
         channel: groupEntity,
@@ -559,20 +546,22 @@ app.post('/add-member', async (req, res) => {
       })
     }
 
-    // ===== VERIFY (LIGHT VERSION) =====
-    await sleep(5000)
+    // ================= PRO VERIFY ENGINE =================
+    await sleep(7000)
 
     let joined = false
 
+    // 1. PRIMARY CHECK
     try {
       await client.getParticipant(groupEntity, userEntity)
       joined = true
     } catch {}
 
-    // 👉 retry (only 2 times)
+    // 2. RETRY CHECK
     if (!joined) {
-      for (let i = 0; i < 2; i++) {
-        await sleep(2000)
+      for (let i = 0; i < 3; i++) {
+        await sleep(3000)
+
         try {
           await client.getParticipant(groupEntity, userEntity)
           joined = true
@@ -581,9 +570,18 @@ app.post('/add-member', async (req, res) => {
       }
     }
 
-    // ❌ REMOVE HEAVY BACKUP CHECK (IMPORTANT)
+    // 3. BACKUP CHECK
+    if (!joined && user_id) {
+      try {
+        const list = await client.getParticipants(groupEntity, {
+          limit: 200
+        })
 
-    // ===== RESULT =====
+        joined = list.some(p => p.id == user_id)
+      } catch {}
+    }
+
+    // ================= RESULT =================
     if (joined) {
       acc.addCount = (acc.addCount || 0) + 1
 
@@ -595,22 +593,23 @@ app.post('/add-member', async (req, res) => {
         username: cleanUsername || username,
         user_id,
         status: "success",
+        reason: "joined (verified)",
         accountUsed: acc.phone,
         timestamp: Date.now()
       })
 
-      // ✅ shorter delay (important)
-      await sleep(8000 + Math.floor(Math.random() * 4000))
+      await sleep(20000 + Math.floor(Math.random() * 10000))
 
       return res.json({
         status: "success",
+        reason: "joined (verified)",
         accountUsed: acc.phone
       })
     }
 
     return res.json({
       status: "failed",
-      reason: "not confirmed",
+      reason: "invite sent but not confirmed",
       accountUsed: acc.phone
     })
 
@@ -619,6 +618,38 @@ app.post('/add-member', async (req, res) => {
       status: "failed",
       reason: err.message,
       accountUsed: "unknown"
+    })
+  }
+})
+app.post('/auto-join', async (req, res) => {
+  try {
+    const { group, account } = req.body
+
+    const acc = accounts.find(a => a.id === account)
+    if (!acc) {
+      return res.status(404).json({ error: "Account not found" })
+    }
+
+    const client = await getClient(acc)
+
+    const clean = normalizeGroup(group)
+
+    try {
+      await client.getEntity(clean)
+    } catch {
+      await client.invoke(
+        new Api.messages.ImportChatInvite({ hash: clean })
+      )
+    }
+
+    return res.json({
+      status: "joined",
+      account: acc.phone
+    })
+
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message
     })
   }
 })
